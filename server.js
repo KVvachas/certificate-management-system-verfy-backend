@@ -27,7 +27,21 @@ const exportSigningKeys = {
   "cms-production-v1": process.env.CMS_EXPORT_SIGNING_KEY,
 };
 
-app.use(cors());
+const allowedOrigins = [
+  "https://cms.vsfreedomsolutions.in",
+  "http://localhost:5173",
+  "http://localhost:8080"
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
 app.use(express.json({ limit: "12mb" }));
 
 const now = () => new Date().toISOString();
