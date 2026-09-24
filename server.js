@@ -1061,8 +1061,12 @@ app.get("/health", async (req, res) => {
    START SERVER
 -------------------------------- */
 
-app.listen(port, () => {
-  console.log(
-    `Central verification backend listening on port ${port}`
-  );
-});
+if (process.env.VERCEL !== "1") {
+  app.listen(port, () => {
+    console.log(
+      `Central verification backend listening on port ${port}`
+    );
+  });
+}
+
+export default app;
