@@ -3,6 +3,7 @@ import cors from "cors";
 import multer from "multer";
 import pg from "pg";
 import crypto from "node:crypto";
+import { generateUniversalCertificateHtml, generateQrDataUrl } from "./universalCertificate.js";
 
 const { Pool } = pg;
 
@@ -988,6 +989,8 @@ app.get(
         certificate: {
           certificateNumber:
             row.certificate_number,
+          verificationToken:
+            row.verification_token,
           recipientName:
             row.participant_name,
           issuedDate:
@@ -1039,6 +1042,88 @@ app.get(
         message:
           "Certificate verification failed.",
       });
+    }
+  }
+);
+
+/* Direct Universal HTML Certificate View */
+app.get(
+  "/api/v1/public/verify/:token/certificate.html",
+  async (req, res) => {
+    try {
+      const token = String(req.params.token || "").trim();
+      if (!token || token.length > 255) {
+        return res.status(400).send("<h1>Invalid verification token</h1>");
+      }
+
+      const result = await pool.query(
+        `SELECT
+          c.certificate_number,
+          c.verification_token,
+          c.issued_date,
+          c.status,
+          p.name AS participant_name,
+          pr.name AS program_name,
+          pr.type AS program_type,
+          pr.description AS program_description,
+          e.name AS event_name,
+          e.organizer
+        FROM certificates c
+        JOIN participants p ON p.id = c.participant_id
+        JOIN programs pr ON pr.id = c.program_id
+        JOIN events e ON e.id = pr.event_id
+        WHERE c.verification_token = $1
+        LIMIT 1`,
+        [token]
+      );
+
+      const row = result.rows[0];
+      if (!row) {
+        return res.status(404).send(`<!DOCTYPE html>
+<html>
+<head><title>Certificate Not Found</title></head>
+<body style="font-family:system-ui,-apple-system,sans-serif;background:#0B0F19;color:#fff;display:grid;place-items:center;min-height:100vh;margin:0;">
+  <div style="background:#1E293B;padding:40px;border-radius:12px;text-align:center;max-width:480px;border:1px solid #334155;">
+    <h2 style="color:#F87171;margin-bottom:12px;">Certificate Not Found</h2>
+    <p style="color:#94A3B8;line-height:1.6;">No authentic certificate record was found for token:<br><code style="color:#38BDF8;font-size:14px;">${token}</code></p>
+    <a href="/verify" style="display:inline-block;margin-top:20px;background:#2563EB;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;font-weight:600;">Go to Verification Portal</a>
+  </div>
+</body>
+</html>`);
+      }
+
+      const host = req.get("host");
+      const proto = req.protocol || "http";
+      const origin = `${proto}://${host}`;
+      const verifyUrl = `${origin}/verify/${encodeURIComponent(row.verification_token)}`;
+      const qrDataUrl = await generateQrDataUrl(verifyUrl);
+
+      const html = generateUniversalCertificateHtml({
+        cert: {
+          certificateNumber: row.certificate_number,
+          verificationToken: row.verification_token,
+          recipientName: row.participant_name,
+          issuedDate: row.issued_date,
+          status: row.status,
+        },
+        program: {
+          name: row.program_name,
+          type: row.program_type,
+          description: row.program_description,
+        },
+        event: {
+          name: row.event_name,
+          organizer: row.organizer,
+        },
+        origin,
+        qrDataUrl,
+      });
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
+    } catch (err) {
+      console.error("Certificate HTML endpoint error:", err);
+      res.status(500).send("<h1>Unable to generate certificate view</h1>");
     }
   }
 );
