@@ -934,15 +934,53 @@ app.get(
         [token]
       );
 
+      const forwarded = req.headers["x-forwarded-for"];
+      const clientIp =
+        (forwarded
+          ? forwarded.split(",")[0].trim()
+          : req.socket?.remoteAddress) || "127.0.0.1";
+
       const row = result.rows[0];
 
       if (!row) {
+        pool
+          .query(
+            `INSERT INTO activity_logs (activity, who, token, certificate_number, event_name, status, ip, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+            [
+              "Verification",
+              `Unknown (${token})`,
+              token,
+              "-",
+              "-",
+              "Invalid",
+              clientIp,
+            ]
+          )
+          .catch(() => {});
+
         return res.status(404).json({
           verified: false,
           message:
             "Certificate could not be verified.",
         });
       }
+
+      pool
+        .query(
+          `INSERT INTO activity_logs (activity, who, token, certificate_number, event_name, status, ip, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+          [
+            "Verification",
+            row.participant_name || `Token: ${token}`,
+            row.verification_token,
+            row.certificate_number || "-",
+            row.event_name || row.program_name || "-",
+            row.status || "VALID",
+            clientIp,
+          ]
+        )
+        .catch(() => {});
 
       res.json({
         verified: row.status === "VALID",
@@ -1004,6 +1042,86 @@ app.get(
     }
   }
 );
+
+/* --------------------------------
+   ACTIVITY LOG ENDPOINTS
+-------------------------------- */
+
+/* Public download logger */
+app.post("/api/v1/public/activity/download", async (req, res) => {
+  try {
+    const forwarded = req.headers["x-forwarded-for"];
+    const clientIp =
+      (forwarded
+        ? forwarded.split(",")[0].trim()
+        : req.socket?.remoteAddress) ||
+      req.body.ip ||
+      "127.0.0.1";
+    const { who, token, certificateNumber, eventName } = req.body;
+
+    await pool.query(
+      `INSERT INTO activity_logs (activity, who, token, certificate_number, event_name, status, ip, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
+      [
+        "Download Certificate",
+        who || "Recipient",
+        token || "-",
+        certificateNumber || "-",
+        eventName || "-",
+        "Downloaded",
+        clientIp,
+      ]
+    );
+
+    res.json({ success: true, message: "Download activity recorded." });
+  } catch (err) {
+    console.error("Failed to record download activity:", err);
+    res.status(500).json({ success: false, message: "Failed to record activity." });
+  }
+});
+
+/* Secured Admin Activity Log Retrieval (Requires ADMIN_IMPORT_KEY) */
+app.get("/api/v1/admin/activity", requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT 
+        id,
+        activity,
+        who,
+        token,
+        certificate_number AS "certificateNumber",
+        event_name AS "eventName",
+        status,
+        ip,
+        created_at AS "at"
+      FROM activity_logs
+      ORDER BY created_at DESC
+      LIMIT 250
+    `);
+
+    res.json({ success: true, activities: result.rows });
+  } catch (err) {
+    console.error("Error fetching activity logs:", err);
+    res.status(500).json({
+      success: false,
+      message: "Unable to load activity logs from database.",
+    });
+  }
+});
+
+/* Secured Admin Activity Clear (Requires ADMIN_IMPORT_KEY) */
+app.delete("/api/v1/admin/activity", requireAdmin, async (req, res) => {
+  try {
+    await pool.query("DELETE FROM activity_logs");
+    res.json({ success: true, message: "Activity logs cleared." });
+  } catch (err) {
+    console.error("Error clearing activity logs:", err);
+    res.status(500).json({
+      success: false,
+      message: "Unable to clear activity logs.",
+    });
+  }
+});
 
 /* --------------------------------
    IMPORT HISTORY
